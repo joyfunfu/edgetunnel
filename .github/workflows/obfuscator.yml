@@ -12,21 +12,18 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      # 步骤 1: 检出源仓库代码
+      # ... [前面几个步骤保持不变] ...
       - name: 检出源仓库代码
         uses: actions/checkout@v4
 
-      # 步骤 2: 设置 Node.js 环境
       - name: 使用 Node.js 18
         uses: actions/setup-node@v4
         with:
           node-version: "18"
 
-      # 步骤 3: 安装依赖
       - name: 安装依赖
         run: npm install -g javascript-obfuscator
 
-      # 步骤 4: 准备源文件
       - name: 准备源文件
         run: |
           if [ ! -f _worker.js.backup ]; then
@@ -35,38 +32,44 @@ jobs:
             cp _worker.js.backup _worker_temp.js
           fi
       
-      # 步骤 5: 动态混淆代码
+      # 步骤 5: 动态混淆代码 (使用更安全的配置)
       - name: 动态混淆代码
         run: |
           SEED=$(( $(date +%s) / 86400 ))
           echo "今日混淆种子: $SEED"
-          javascript-obfuscator _worker_temp.js --output _worker.js \
-            --compact true --seed $SEED --control-flow-flattening true \
-            --control-flow-flattening-threshold 0.75 --dead-code-injection true \
-            --dead-code-injection-threshold 0.4 --disable-console-output true \
-            --identifier-names-generator hexadecimal --rename-globals true \
-            --self-defending true --string-array true --string-array-encoding 'rc4' \
-            --string-array-threshold 0.75 --transform-object-keys true \
-            --unicode-escape-sequence true
 
-      # 步骤 6: 检出目标仓库 (使用新的 PAT 方式)
+          # --- 使用了对 Cloudflare Workers 更友好的配置 ---
+          # 移除了 self-defending
+          # 降低了 control-flow-flattening 的阈值
+          javascript-obfuscator _worker_temp.js --output _worker.js \
+            --compact true \
+            --seed $SEED \
+            --control-flow-flattening true \
+            --control-flow-flattening-threshold 0.5 \
+            --dead-code-injection true \
+            --dead-code-injection-threshold 0.2 \
+            --disable-console-output true \
+            --identifier-names-generator hexadecimal \
+            --rename-globals true \
+            --string-array true \
+            --string-array-encoding 'base64' \
+            --string-array-threshold 0.5 \
+            --transform-object-keys true \
+            --unicode-escape-sequence false
+
+      # ... [后面的步骤保持不变] ...
       - name: 检出目标仓库
         uses: actions/checkout@v4
         with:
-          # ！！！ 确认目标仓库名正确 ！！！
           repository: 'joyfunfu/silent-wood-cc22'
-          # 使用我们配置的 PAT 进行认证
           token: ${{ secrets.ACCESS_TOKEN }}
-          # 将目标仓库克隆到 'deploy_repo' 文件夹
           path: 'deploy_repo'
 
-      # 步骤 7: 复制混淆文件
       - name: 复制混淆文件
         run: |
           mkdir -p deploy_repo
           cp _worker.js ./deploy_repo/_worker.js
 
-      # 步骤 8: 在目标仓库中提交并推送
       - name: 提交并推送到目标仓库
         run: |
           cd deploy_repo
@@ -76,8 +79,7 @@ jobs:
           if git diff --staged --quiet; then
             echo "目标仓库代码无变化，跳过提交。"
           else
-            git commit -m "chore: 每日更新 worker" -m "源自 ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+            git commit -m "chore: 每日自动更新混淆后的 worker (safe-config)"
             git push
             echo "成功将更新推送到目标仓库。"
           fi
-
