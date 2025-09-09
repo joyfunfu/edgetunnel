@@ -79,7 +79,8 @@ jobs:
           if git diff --staged --quiet; then
             echo "目标仓库代码无变化，跳过提交。"
           else
-            git commit -m "chore: 每日自动更新混淆后的 worker (safe-config)"
+            git commit -m "chore: 更新 worker"
             git push
             echo "成功将更新推送到目标仓库。"
           fi
+
