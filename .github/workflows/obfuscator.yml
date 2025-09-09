@@ -1,7 +1,6 @@
 # 工作流名称
-name: 混淆并部署到目标仓库 (使用 PAT)
+name: 混淆并通过 SSH 部署到目标仓库
 
-# 工作流触发器
 on:
   workflow_dispatch:
   schedule:
@@ -12,36 +11,30 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      # ... [前面几个步骤保持不变] ...
-      - name: 检出源仓库代码
+      # 步骤 1: 检出源仓库代码
+      - name: 检出源仓库
         uses: actions/checkout@v4
 
-      - name: 使用 Node.js 18
+      # 步骤 2 & 3: 设置环境并安装依赖
+      - name: 设置 Node.js 18
         uses: actions/setup-node@v4
         with:
           node-version: "18"
-
-      - name: 安装依赖
+      - name: 安装 javascript-obfuscator
         run: npm install -g javascript-obfuscator
 
-      - name: 准备源文件
+      # 步骤 4: 准备并混淆代码
+      - name: 混淆源文件
         run: |
-          if [ ! -f _worker.js.backup ]; then
-            cp _worker.js _worker_temp.js
-          else
-            cp _worker.js.backup _worker_temp.js
+          SOURCE_FILE="_worker.js"
+          if [ -f "_worker.js.backup" ]; then
+            SOURCE_FILE="_worker.js.backup"
           fi
-      
-      # 步骤 5: 动态混淆代码 (使用更安全的配置)
-      - name: 动态混淆代码
-        run: |
+          
           SEED=$(( $(date +%s) / 86400 ))
-          echo "今日混淆种子: $SEED"
+          echo "使用源文件: $SOURCE_FILE, 混淆种子: $SEED"
 
-          # --- 使用了对 Cloudflare Workers 更友好的配置 ---
-          # 移除了 self-defending
-          # 降低了 control-flow-flattening 的阈值
-          javascript-obfuscator _worker_temp.js --output _worker.js \
+          javascript-obfuscator $SOURCE_FILE --output _worker.js \
             --compact true \
             --seed $SEED \
             --control-flow-flattening true \
@@ -57,30 +50,34 @@ jobs:
             --transform-object-keys true \
             --unicode-escape-sequence false
 
-      # ... [后面的步骤保持不变] ...
+      # 步骤 5: 检出目标仓库 (使用 SSH 密钥)
       - name: 检出目标仓库
         uses: actions/checkout@v4
         with:
+          # 您的目标仓库
           repository: 'joyfunfu/silent-wood-cc22'
-          token: ${{ secrets.ACCESS_TOKEN }}
+          # 使用我们新配置的 SSH 私钥进行认证
+          ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          # 将目标仓库克隆到独立的 'deploy_repo' 文件夹
           path: 'deploy_repo'
 
-      - name: 复制混淆文件
-        run: |
-          mkdir -p deploy_repo
-          cp _worker.js ./deploy_repo/_worker.js
-
-      - name: 提交并推送到目标仓库
+      # 步骤 6: 复制文件并提交推送
+      - name: 复制混淆文件并推送到目标仓库
         run: |
           cd deploy_repo
+          # 将新生成的 _worker.js 复制并覆盖到目标仓库的克隆目录
+          cp ../_worker.js ./_worker.js
+          
+          # 配置 Git 用户信息
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add _worker.js
-          if git diff --staged --quiet; then
+          
+          # 检查是否有文件更改，如果没有则跳过
+          if git diff --staged --quiet && git diff --quiet; then
             echo "目标仓库代码无变化，跳过提交。"
-          else
-            git commit -m "chore: 更新 worker"
-            git push
-            echo "成功将更新推送到目标仓库。"
+            exit 0
           fi
-
+          
+          git add _worker.js
+          git commit -m "chore: 更新 worker" -m "源自 ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+          git push
