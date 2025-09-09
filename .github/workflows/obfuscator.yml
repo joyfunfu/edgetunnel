@@ -1,39 +1,47 @@
 # 工作流名称
 name: 混淆并通过 SSH 部署到目标仓库
 
+# 工作流触发器：允许手动触发和每日定时运行
 on:
   workflow_dispatch:
   schedule:
+    # 使用 Cron 语法，在每天 UTC 时间凌晨 3:00 运行
     - cron: '0 3 * * *'
 
 jobs:
   build-and-deploy:
+    # 在最新的 Ubuntu 环境中运行
     runs-on: ubuntu-latest
     
     steps:
-      # 步骤 1: 检出源仓库代码
+      # 步骤 1: 检出源仓库代码，以便获取 _worker.js 源文件
       - name: 检出源仓库
         uses: actions/checkout@v4
 
-      # 步骤 2 & 3: 设置环境并安装依赖
+      # 步骤 2: 设置 Node.js 环境
       - name: 设置 Node.js 18
         uses: actions/setup-node@v4
         with:
           node-version: "18"
+
+      # 步骤 3: 安装 javascript-obfuscator 依赖
       - name: 安装 javascript-obfuscator
         run: npm install -g javascript-obfuscator
 
       # 步骤 4: 准备并混淆代码
       - name: 混淆源文件
         run: |
+          # 优先使用备份文件作为混淆源，如果不存在则使用当前文件
           SOURCE_FILE="_worker.js"
           if [ -f "_worker.js.backup" ]; then
             SOURCE_FILE="_worker.js.backup"
           fi
           
+          # 使用每日变化的种子确保输出结果不同
           SEED=$(( $(date +%s) / 86400 ))
           echo "使用源文件: $SOURCE_FILE, 混淆种子: $SEED"
 
+          # 使用对 Cloudflare Workers 友好的、稳定的混淆配置
           javascript-obfuscator $SOURCE_FILE --output _worker.js \
             --compact true \
             --seed $SEED \
@@ -50,34 +58,40 @@ jobs:
             --transform-object-keys true \
             --unicode-escape-sequence false
 
-      # 步骤 5: 检出目标仓库 (使用 SSH 密钥)
+      # 步骤 5: 检出目标仓库，准备接收文件
       - name: 检出目标仓库
         uses: actions/checkout@v4
         with:
           # 您的目标仓库
           repository: 'joyfunfu/silent-wood-cc22'
-          # 使用我们新配置的 SSH 私钥进行认证
+          # 使用我们配置的 SSH 私钥进行认证
           ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
-          # 将目标仓库克隆到独立的 'deploy_repo' 文件夹
+          # 将目标仓库克隆到独立的 'deploy_repo' 文件夹，避免冲突
           path: 'deploy_repo'
 
-      # 步骤 6: 复制文件并提交推送
+      # 步骤 6: 复制文件、提交并推送到目标仓库 (使用修正后的逻辑)
       - name: 复制混淆文件并推送到目标仓库
         run: |
+          # 进入目标仓库的克隆目录
           cd deploy_repo
-          # 将新生成的 _worker.js 复制并覆盖到目标仓库的克隆目录
+          
+          # 将新生成的 _worker.js 复制并覆盖到这里
           cp ../_worker.js ./_worker.js
           
-          # 配置 Git 用户信息
+          # 配置 Git 提交者信息
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # 检查是否有文件更改，如果没有则跳过
-          if git diff --staged --quiet && git diff --quiet; then
-            echo "目标仓库代码无变化，跳过提交。"
-            exit 0
-          fi
+          # --- 修正后的提交逻辑 ---
+          # 1. 首先将所有更改（包括新文件和被修改的文件）添加到 Git 暂存区
+          git add .
           
-          git add _worker.js
-          git commit -m "chore: 更新 worker" -m "源自 ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
-          git push
+          # 2. 然后再检查暂存区是否为空。如果为空，则说明真的没有任何变化
+          if git diff --staged --quiet; then
+            echo "目标仓库代码无变化，跳过提交。"
+          else
+            # 如果暂存区有内容，则执行提交和推送
+            git commit -m "chore: 更新 worker" -m "源自 ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+            git push
+            echo "成功将更新推送到目标仓库。"
+          fi
