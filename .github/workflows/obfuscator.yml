@@ -1,63 +1,108 @@
-name: 混淆当前版本源码
+# 工作流名称
+name: 混淆并部署到目标仓库
+
+# 工作流触发器
 on:
-    workflow_dispatch:
+  # 允许手动触发
+  workflow_dispatch:
+
+  # 每日定时触发
+  schedule:
+    - cron: '0 3 * * *'
 
 jobs:
-  obfuscate:
+  build-and-deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
+    
     steps:
-      - uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
+      # 步骤 1: 检出源仓库代码 (Repo A)
+      - name: 检出源仓库代码
+        uses: actions/checkout@v4
 
-      - name: 使用 Node.js
-        uses: actions/setup-node@v3
+      # 步骤 2: 设置 Node.js 环境
+      - name: 使用 Node.js 18
+        uses: actions/setup-node@v4
         with:
-          node-version: "16"
+          node-version: "18"
 
+      # 步骤 3: 安装 javascript-obfuscator
       - name: 安装依赖
         run: npm install -g javascript-obfuscator
 
-      - name: 检查备份文件是否存在
+      # 步骤 4: 准备用于混淆的源文件
+      - name: 准备源文件
         run: |
           if [ ! -f _worker.js.backup ]; then
-            echo "备份文件 _worker.js.backup 不存在，正在创建..."
-            cp _worker.js _worker.js.backup
-          fi
-          cp _worker.js.backup _worker_temp.js
-
-      - name: 混淆代码
-        run: |
-          javascript-obfuscator _worker_temp.js --output _worker.js \
-          --compact true \
-          --control-flow-flattening true \
-          --control-flow-flattening-threshold 1 \
-          --dead-code-injection true \
-          --dead-code-injection-threshold 1 \
-          --identifier-names-generator hexadecimal \
-          --rename-globals true \
-          --string-array true \
-          --string-array-encoding 'rc4' \
-          --string-array-threshold 1 \
-          --transform-object-keys true \
-          --unicode-escape-sequence true
-
-      - name: 提交更改
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add _worker.js _worker.js.backup
-          if git diff --cached --quiet; then
-            echo "没有文件更改，跳过提交"
+            echo "备份文件不存在，使用当前 _worker.js 作为源文件。"
+            cp _worker.js _worker_temp.js
           else
-            git commit -m "混淆 _worker.js 文件并备份原文件"
+            echo "使用备份文件 _worker.js.backup 作为源文件。"
+            cp _worker.js.backup _worker_temp.js
           fi
+      
+      # 步骤 5: 动态生成参数并混淆代码
+      - name: 动态混淆代码
+        run: |
+          # 使用自 Unix 纪元以来的天数作为种子，确保输出每天变化
+          SEED=$(( $(date +%s) / 86400 ))
+          echo "今日混淆种子: $SEED"
 
-      - name: 推送更改
-        uses: ad-m/github-push-action@master
+          javascript-obfuscator _worker_temp.js --output _worker.js \
+            --compact true \
+            --seed $SEED \
+            --control-flow-flattening true \
+            --control-flow-flattening-threshold 0.75 \
+            --dead-code-injection true \
+            --dead-code-injection-threshold 0.4 \
+            --disable-console-output true \
+            --identifier-names-generator hexadecimal \
+            --rename-globals true \
+            --self-defending true \
+            --string-array true \
+            --string-array-encoding 'rc4' \
+            --string-array-threshold 0.75 \
+            --transform-object-keys true \
+            --unicode-escape-sequence true
+
+      # 步骤 6: 检出目标仓库 (Repo B)
+      - name: 检出目标仓库
+        uses: actions/checkout@v4
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          branch: ${{ github.ref }}
+          # ！！！ crucial: 替换成你的目标仓库 ！！！
+          repository: 'joyfunfu/silent-wood-cc22'
+          # 使用我们配置的 SSH 私钥进行认证
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+          # 将目标仓库克隆到 'deploy_repo' 文件夹中，避免与源仓库冲突
+          path: 'deploy_repo'
+
+      # 步骤 7: 复制混淆后的文件到目标仓库目录
+      - name: 复制混淆文件
+        run: |
+          # 确保目标目录存在
+          mkdir -p deploy_repo
+          # 将新生成的 _worker.js 复制过去，如果文件已存在则会覆盖
+          cp _worker.js ./deploy_repo/_worker.js
+          echo "已将混淆后的文件复制到目标仓库目录。"
+
+      # 步骤 8: 在目标仓库中提交并推送
+      - name: 提交并推送到目标仓库
+        run: |
+          cd deploy_repo
+          
+          # 配置 git 用户信息
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 将更改添加到暂存区
+          git add _worker.js
+          
+          # 检查是否有文件更改，如果没有则跳过提交
+          if git diff --staged --quiet; then
+            echo "目标仓库代码无变化，跳过提交。"
+          else
+            # 提交更改，并附带源仓库的提交哈希以供追溯
+            git commit -m "chore: 每日自动更新混淆后的 worker" -m "源自 ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+            # 推送更改
+            git push
+            echo "成功将更新推送到目标仓库。"
+          fi
