@@ -60,7 +60,7 @@ jobs:
       - name: 检出目标仓库
         uses: actions/checkout@v4
         with:
-          repository: 'joyfunfu/silent-wood-cc22'
+          repository: 'joyfunfu/prettylazy'
           ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
           path: 'deploy_repo'
 
@@ -78,3 +78,4 @@ jobs:
             git push
             echo "成功将更新推送到目标仓库。"
           fi
+
